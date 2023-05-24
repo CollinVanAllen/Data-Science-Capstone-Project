@@ -1,0 +1,377 @@
+---
+title: "Municipality Report"
+author: "Data Science Capstone Team"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+library(janitor)
+library(reshape)
+library(reshape2)
+library(lubridate)
+library(tidyverse)
+library(raster)
+library(rgdal)
+library(sp)
+library(sf)
+library(imager)
+
+dataset <- read_csv("Combined Files/municipFinal.csv")
+wisconsinData <- read_csv("Combined Files/municip.csv")
+dataset
+
+#-------------------------------------------------------------------------------
+# Only change these values to create report based on wanted municipality
+#-------------------------------------------------------------------------------
+
+municipality <- 'seymour'
+municipalityType <- "t"
+
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
+
+municipality <- toupper(municipality)
+municipalityType <- toupper(municipalityType)
+
+
+match_row <- dataset$Municipality == municipality & 
+  dataset$`Muni Type Code` == municipalityType
+
+if (sum(match_row) > 0) {
+  # If there is a match, assign the corresponding county name
+  county <- unique(dataset$`County Name`[match_row])
+} else {
+  # If there is no match, assign NA to county
+  county <- NA
+}
+
+county <- toupper(county)
+
+municipalityTypeFull <- case_when(
+  municipalityType == "C" ~ "City",
+  municipalityType == "V" ~ "Village",
+  TRUE ~ "Township")
+
+Label = paste(municipality, "-", municipalityType)
+```
+<!-- I don't have an E drive, so commented out. Will resolve later -->
+
+
+```{r logo, echo=FALSE,warning=FALSE,message=FALSE,comment=NA,fig.height = 3, fig.width = 5,fig.align = "center"}
+im<-load.image("Images/logo.png")
+plot(im, axes = FALSE)
+```
+<!--
+<html>
+  <img align="right" width="300" height="100" src="E:/Capstone/Images/Logo.png">
+</html>
+-->
+
+# Individual Report for `r paste(str_to_title(municipality),"-",str_to_title(municipalityTypeFull))` in `r paste(str_to_title(county))` County:  
+```{r test, echo=FALSE,warning=FALSE,message=FALSE}
+
+specMunData <- dataset %>% filter(Municipality == municipality & 
+                                    `Muni Type Code` == municipalityType & `County Name` == county)
+linModel <- glm(fundEstimate ~ Year, data = specMunData, family = "gaussian")
+
+#adjust for negative values? Place on a scale?
+trendScore <- linModel$coefficients[2]
+
+#adjust for negative values? Place on a scale?
+overallScore <- specMunData %>% summarise(fundStandardizedProfit = mean(fundStandardizedProfit))
+
+#sensitivityscore?
+```
+
+
+
+## Introduction:
+
+This report gives a comprehensive look at the financial performance of the municipality specified and provides
+insight into the factors that separate financial success and financial failure. The focus area for our reports 
+are the municipalities included within the Southwest Wisconsin Counties of Grant, Green, Iowa, Lafayette and Richland.
+Our data set is obtained from the Department of Revenue website with additional assistance provided by the 
+Southwest Regional Planning Commission. Our data spans the years of `r lubridate::year(min(dataset$Year))` to `r lubridate::year(max(dataset$Year))`.
+
+
+
+## Definition of terms:
+
+#### **Total Revenue** - 
+The total revenue obtained by a municipality in a given year. Includes the following: All Other State Aids, Fines Forfeitures and Penalties, General Property Taxes, In Lieu of Taxes, Interest Income, Intergovernmental Charges for Services, Licenses and Permits, Other Local Government Aids, Other Revenues, Other Taxes, Public Charges for Services, Special Assessments, State Highway Aids, State Shared Revenues, and Tax Increments. 
+
+#### **Total Expenses** - 
+The total expenses spent by a municipality in a given year. Includes the following: All Other Expenditures, Ambulances, Conservation and Development, Culture and Education, Fire, General Government, Health and Human Resources, Highway Maintenance and Administration, Law Enforcement, Other Financing Uses, Other Public Safety, Other Sanitation, Other Transportation, Parks and Recreation, Road Related Facilities, Solid Waste Collection and Disposal.
+
+#### **Fund Estimate** - 
+An estimate of the municipality's general fund. 
+Initial estimate is calculated by one-fourth initial year's expenses summed with that year's revenue minus expenses.
+Each following year's fund is calculated by summing the previous year's fund with that year's revenue minus expenses.
+
+#### **Standardized Profit** - 
+A measure created to compare the performance of municipalities.
+Standardization is required due to large discrepancies in expenses and revenues between municipalities caused by population sizes.
+Calculated by taking that year's revenue and subtracting it by that year's expenses. 
+Then divide the result by that year's expenses.
+
+#### **Percentile of Standardized Profit** - 
+Represents what percentage of municipalities performed worse than that municipality in a specific year.
+
+#### **Vulnerability** -
+A measure defined to assess if a municipality is at risk of failing in a given year. A vulnerable year is defined as expenditures exceeding revenue by a magnitude over one fourth the previous years' expenditures.  
+
+
+```{r map,echo=FALSE,warning=FALSE,message=FALSE,results='hide',comment=NA,fig.height = 5, fig.width = 5, fig.align = "center"}
+shape <- st_read("GIS/CapstoneFiles/Wi5Counties.shp")
+
+shape$LABEL <- toupper(shape$LABEL)
+
+shape$color_var <- ifelse(shape$LABEL == Label, "grey", "red")
+
+shape %>% ggplot() +
+  geom_sf(aes(fill = color_var)) +
+  scale_fill_manual(values = c("red", "grey")) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = "none",
+        text = element_text(size = 20)) +
+  labs(title = paste("Location of",str_to_title(municipality),str_to_title(municipalityTypeFull)))
+```
+
+<!--
+***
+
+```{r population, echo=FALSE,warning=FALSE,message=FALSE, fig.height = 4, fig.width = 7, fig.align = "center"}
+
+dataset %>%
+  filter(`Muni Type Code` == municipalityType & Municipality == municipality) %>%
+  ggplot(aes(x = Year)) +
+  geom_point(aes(y = Population)) +
+  geom_line(aes(y = Population)) +
+  labs(y = "Population", title = paste("Population -", str_to_title(municipality), str_to_title(municipalityTypeFull))) + 
+  guides(size = "none") +
+  theme_bw() +
+  theme(text = element_text(size=14)) +
+  scale_x_date(breaks = "1 year", date_labels = "%Y")
+  
+
+```
+-->
+
+\newpage
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+
+```{r revexp, echo=FALSE, fig.align="center", fig.height=6, fig.width=10, message=FALSE, warning=FALSE}
+# revexp <- dataset %>%
+#   filter(`Muni Type Code` == municipalityType & Municipality == municipality) %>% # Filter selected municipality
+#   ggplot(aes(x = Year)) +
+#   geom_line(aes(y = `Total Revenue Updated`, color = "blue")) + # Add lines and points
+#   geom_point(aes(y = `Total Revenue Updated`, color = "blue", size = 1.5, shape = vulnerability)) +
+#   geom_line(aes(y = `Total Expenses Updated`, color = "red")) +
+#   geom_point(aes(y = `Total Expenses Updated`, color = "red", size = 1.5, shape = vulnerability)) +
+#   scale_y_continuous(labels=scales::dollar_format()) + # Format for dollars
+#   scale_color_manual(values = c("blue", "red"),
+#                      labels = c("Revenue", "Expenses")) + # Add in key
+#   labs(y = "Dollars ($)", title = paste("Revenue and Expenditures -", str_to_title(municipality), str_to_title(municipalityTypeFull))) +
+#   guides(size = "none") +
+#   theme_bw() +
+#   theme(text = element_text(size=20)) +
+#   scale_x_date(breaks = "1 year", date_labels = "%Y")
+
+revexp <- dataset %>%
+  filter(`Muni Type Code` == municipalityType & Municipality == municipality) %>% # Filter selected municipality
+  ggplot(aes(x = Year)) +
+  geom_line(aes(y = `Total Revenue Updated`, color = "blue")) + # Add lines
+  geom_line(aes(y = `Total Expenses Updated`, color = "red")) +
+  geom_point(aes(y = `Total Revenue Updated`, color = "blue", size = 1.5, shape = vulnerability)) +
+  geom_point(aes(y = `Total Expenses Updated`, color = "red", size = 1.5, shape = vulnerability)) +
+  scale_y_continuous(labels = scales::dollar_format()) + # Format for dollars
+  scale_color_manual(values = c("blue", "red"), labels = c("Revenue", "Expenses")) + # Add in key
+  labs(y = "Dollars ($)", title = paste("Revenue and Expenditures -", str_to_title(municipality), str_to_title(municipalityTypeFull))) +
+  guides(size = "none") +
+  theme_bw() +
+  theme(text = element_text(size = 20)) +
+  scale_x_date(breaks = "1 year", date_labels = "%Y") +
+  scale_shape_manual(values = c("No Fail" = 16, "Fail" = 8), na.value = 16) # Define shapes and handle NA values
+
+
+revexp
+
+# ggsave(filename = "RevExpGraph.png", plot = revexp)
+
+```
+
+**Figure 1** shows the basic revenue and expenditure for `r str_to_title(municipality)` from `r lubridate::year(min(dataset$Year))` to `r lubridate::year(max(dataset$Year))`. The revenue is adjust to account for removed revenues such as federal aid or ARPA funds, and expenses such as debt service and highway construction. This graph serves to visualize overall year-to-year spending and provides minimal explanation the vulnerability.  
+
+\newpage
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+
+```{r breakoutr, echo=FALSE,message=FALSE,warning=FALSE, fig.height = 13, fig.width = 15, fig.align = "center"}
+municipFilter <- dataset %>% filter(`County Name` == county) # Create new subset based on county
+
+municipFilter$vulnerability[is.na(municipFilter$vulnerability)] <- "NA"
+
+# Revenues ------------------------------ 
+
+municipRevenue <- municipFilter[,c(3:5, 7:10, 12, 14:17, 19:24 , 55, 59, 61)] # Selecting relevant variables
+municipLong <- municipRevenue %>% # Push data into long format so we can split the graphs later
+  pivot_longer(cols = -c("Muni Type Code", "County Name", "Municipality", "Year", "vulnerability"))
+municipLong <- as_tibble(municipLong)
+municipLong$Year <- as.Date(municipLong$Year)
+
+revenues <- municipLong %>% 
+  filter(Municipality == municipality & `Muni Type Code` == municipalityType) %>% 
+  ggplot(aes(x = Year)) +
+  geom_point(aes(y = value, color = vulnerability, size = 1.5)) + # Use colorID instead of vulnerability
+  geom_line(aes(y = value)) +
+  facet_wrap(~name) + 
+  scale_color_manual(values = c("NA" = "grey", "Fail" = "red", "No Fail" = "blue")) +
+  scale_y_continuous(labels=scales::dollar_format()) +
+  labs(title = paste("Revenue --",str_to_title(municipality),str_to_title(municipalityTypeFull))) +
+  guides(size = "none") +
+  theme_bw()
+
+revenues
+
+```
+
+\newpage
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+
+```{r breakoute, echo=FALSE,warning=FALSE,message=FALSE, fig.height = 13, fig.width = 15, fig.align = "center"}
+# Expenses ------------------------
+
+municipExpenses <- municipFilter[,c(3:5,27, 29:34, 36:44, 55, 58, 61)] # Select expenses variables
+municipLongE <- municipExpenses %>% # Push data into long format similar to revenue
+  pivot_longer(cols = -c("Muni Type Code", "County Name", "Municipality", "Year", "vulnerability"))
+municipLongE <- as_tibble(municipLongE)
+municipLongE$Year <- as.Date(municipLongE$Year)
+
+expenses <- municipLongE %>%
+  filter(Municipality == municipality & `Muni Type Code` == municipalityType) %>%
+  ggplot(aes(x = Year)) +
+  geom_point(aes(y = value, color = vulnerability, size = 1.5)) + 
+  geom_line(aes(y = value)) +
+  facet_wrap(~name) +
+  scale_color_manual(values = c("NA" = "grey", "Fail" = "red", "No Fail" = "blue")) +
+  scale_y_continuous(labels=scales::dollar_format()) +
+  labs(title = paste("Expenses --",str_to_title(municipality),str_to_title(municipalityTypeFull))) +
+  guides(size = "none") +
+  theme_bw()
+
+
+expenses
+
+```
+
+The breakout graphs in **Figure 2** and **Figure 3** are for `r str_to_title(municipality)` from `r lubridate::year(min(dataset$Year))` to `r lubridate::year(max(dataset$Year))`. These graphs show the various revenue and expenses broken out along with points colored based on the vulnerability status of the municipality. These graphs share the same scale and are an effort to try and understand the reasoning for the failures on a year-to-year basis. Data on the vulnerability for the year `r lubridate::year(min(dataset$Year))` is unavailable because the algorithm to compute this metric uses this year to calculate an estimated fund. Because of this the value for the first year will always be listed as NA since without an actual fund value we cannot determine if the year is considered a Fail or No Fail.  
+
+
+\newpage
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+
+```{r trendline, echo=FALSE,warning=FALSE,message=FALSE, fig.height = 10, fig.width = 15, fig.align = "center"}
+
+# Trend Line ------------------------
+
+
+#more breaks for easier to see values? Labels on dots will be too bulky
+
+trendLine <- ggplot(specMunData, aes(x = Year, y = fundEstimate)) +
+  geom_point(aes(color = vulnerability), size = 3.5) +
+  geom_smooth(method=lm , color="red", se = F) +
+  ggtitle(paste("Estimated Fund Trend Line --", str_to_title(municipality), str_to_title(municipalityTypeFull))) +
+  ylab("Fund Estimate ($)")  +
+  theme(text = element_text(size=20)) +
+  scale_x_date(breaks = "1 year", date_labels = "%Y") +
+  scale_y_continuous(labels=scales::dollar_format()) +
+  geom_hline(yintercept=0, linetype="dashed")
+
+trendLine
+
+```
+
+**Figure 4** shows the estimated fund over the years of `r lubridate::year(min(dataset$Year))` to `r lubridate::year(max(dataset$Year))` based on the initial fund estimate.
+Shows the trajectory of financial health for that municipality.
+
+\newpage
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+
+```{r percentileSW, echo=FALSE,warning=FALSE,message=FALSE, fig.height = 10, fig.width = 15, fig.align = "center"}
+
+#Rank dot plot for SouthWest Wisconsin ---------------------------------
+
+
+rankSW <- ggplot(specMunData, aes(x = Year, y = rankPercent, label = paste(rankPercent, "%"))) +
+  geom_point(aes(color = vulnerability), size = 3.5) + geom_text(hjust=0.35, vjust=-0.8, size = 6) +
+  ggtitle(paste("Percentile of Standardized Profit Rank in South West Wisconsin -", str_to_title(municipality),str_to_title(municipalityTypeFull))) +
+  ylab("Percent") +
+  scale_x_date(breaks = "1 year", date_labels = "%Y") +
+  theme(text = element_text(size=20)) +
+  scale_y_continuous(breaks = c(0,25,50,75,100), labels = c("0%", "25%", "50%", "75%", "100%"), limits = c(0,100))
+
+rankSW
+```
+
+**Figure 5** shows the percentile of municipalities in Southwest Wisconsin that performed worse than our specified municipality 
+over the years of `r lubridate::year(min(dataset$Year))` to `r lubridate::year(max(dataset$Year))`.
+Helps compare municipalities with the overall performance of the rest of Southwest Wisconsin.
+
+\newpage
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+\hfill\break
+
+```{r percentileWisc, echo=FALSE,warning=FALSE,message=FALSE, fig.height = 10, fig.width = 15, fig.align = "center"}
+
+#Rank dot plot for all of Wisconsin -----------------------------------
+
+specMunDataWis <- wisconsinData %>% filter(Municipality == municipality & 
+                                             `Muni Type Code` == municipalityType & `County Name` == county)
+rank <- ggplot(specMunDataWis, aes(x = Year, y = rankPercent, label = paste(rankPercent, "%"))) +
+  geom_point(aes(color = vulnerability), size = 3.5) +
+  geom_text(hjust=0.35, vjust=-0.8, size = 6) +
+  ggtitle(paste("Percentile of Standardized Profit Rank in Wisconsin -", str_to_title(municipality),str_to_title(municipalityTypeFull))) +
+  ylab("Percent") +
+  scale_x_date(breaks = "1 year", date_labels = "%Y") + theme(text = element_text(size=20)) +
+  scale_y_continuous(breaks = c(0,25,50,75,100), labels = c("0%", "25%", "50%", "75%", "100%"), limits = c(0,100))
+
+rank
+```
+**Figure 6** shows the percentile of municipalities in Wisconsin that performed worse than our specified municipality 
+over the years of `r lubridate::year(min(dataset$Year))` to `r lubridate::year(max(dataset$Year))`.
+Helps compare municipalities with the overall performance of the rest of Wisconsin.

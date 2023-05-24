@@ -1,0 +1,517 @@
+---
+title: "Report"
+author: "Collin Van Allen & Jacob Nelson"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(ggplot2)
+library(scales)
+library(beepr)
+library(forecast)
+library(MLmetrics)
+
+
+options(scipen=999)
+
+
+
+municip <- read_csv("Combined Files/Combined_Municipalities.csv")
+PSW_Aid <- read_csv("PSW Aid.csv")
+
+# Only use for year 2021, value is halved for aid split between 21/22
+PSW_Aid <- na.omit(PSW_Aid)
+PSW_Aid$Year <- "2021-01-01"
+PSW_Aid$Year <- ymd(PSW_Aid$Year)
+municip$Year <- ymd(municip$Year)
+
+municip <- left_join(x = municip, y = PSW_Aid)
+
+municip$`PSW Aid`[is.na(municip$`PSW Aid`)] <- 0
+municip$`PSW Halved`[is.na(municip$`PSW Halved`)] <- 0
+municip
+municip <- municip %>% mutate(`Total Expenses Updated` = 
+                     `Total Expenditures & Other Financing Uses` - (`Total Debt Service` + `Highway Construction`))
+municipPlusARPA <- municip %>% mutate(`Total Revenue Updated` = `Total Revenue & Other Financing Sources` - `Other Financing Sources`)
+
+municip <- municip %>% mutate(`Total Revenue Updated` = `Total Revenue & Other Financing Sources` - `Other Financing Sources` - `PSW Halved` - `Federal Aids`)
+
+municip <- municip %>% mutate(Fail = case_when(`Total Expenses Updated` > `Total Revenue Updated` ~ "Fail", TRUE ~ "No Fail"))
+municipPlusARPA <- municipPlusARPA %>% mutate(Fail = case_when(`Total Expenses Updated` > `Total Revenue Updated` ~ "Fail", TRUE ~ "No Fail"))
+
+`%!in%` = Negate(`%in%`)
+
+#remove problem municipalities that changed from one type to another between 2013 and 2021.
+municip <- municip %>% filter(Municipality %!in% c("WINDSOR","SOMERS", "MAINE",  "Totals", "FOX CROSSING", "SALEM LAKES","YORKVILLE", "RAYMOND", "GREENVILLE", "VERNON", "WAUKESHA" ))
+
+
+municip
+
+#Second failure criteria function (outdated)
+critFailureTest<- function(index, dataSet){
+
+ #Check if initial year is 2013. No previous revenue data so can't estimate a fund for 2013.
+  if(year(dataSet$Year[index]) == 2013){
+        return('NA')
+  }
+ #Check if current year even has expenditures > revenue
+  if(dataSet$Fail[index] == 'No Fail'){
+    return('No Fail')
+  }
+  
+data <- dataSet[index,]
+sum = 0
+#check to make sure year isn't 2013
+check = TRUE
+#iterates over previous years data and sums total of e - r for consecutive years in red starting at current year.
+  while(data$`Total Expenses Updated` - data$`Total Revenue Updated` > 0 & check){
+    sum = data$`Total Expenses Updated` - data$`Total Revenue Updated` + sum
+    
+    #Goes back a year unless current year is 2013
+    if(year(data$Year) != 2013){
+      data <- dataSet %>% filter(`Muni Code` == data$`Muni Code` & `County Name` == data$`County Name` & year(Year) == (year(data$Year) - 1))
+    }
+    else
+      check = FALSE
+  }
+#Grabs last years data for municipality
+ lastYear <- dataSet %>% filter(`Muni Code` == dataSet$`Muni Code`[index] & `County Name` == dataSet$`County Name`[index] & year(Year) == (year(Year[index]) - 1))
+
+ #Checks if sum in previous iteration is over our fund estimate of 1/4 the previous years revenue.
+if (sum > (.25 * lastYear$`Total Revenue Updated` ))
+  return('Fail')
+else
+  return('No Fail')
+
+
+}
+
+#Third falure criteria (Currently preferred)
+vulnerabilityStatusCheck <- function(index, dataSet){
+  
+  if(year(dataSet$Year[index]) == 2013){
+    return('NA')
+  }
+  
+  if(dataSet$Fail[index] == 'No Fail'){
+    return('No Fail')
+  }
+  
+  #Grabs last years data for municipality
+  lastYear <- dataSet %>% filter(`Muni Code` == dataSet$`Muni Code`[index] & `County Name` == dataSet$`County Name`[index] & year(Year) == (year(Year[index]) - 1))
+  
+  data <- dataSet[index,]
+  #Checks if sum in previous iteration is over our fund estimate of 1/4 the previous years revenue.
+  if ((data$`Total Expenses Updated` - data$`Total Revenue Updated`) > (.25 * lastYear$`Total Expenses Updated` ))
+    return('Fail')
+  else
+    return('No Fail')
+}
+
+#Calculates a fund given an initial fund at 1/4 the expenses of 2013
+fundEstimateCalculation <- function(index, dataSet){
+   
+    data <- dataSet[index,]
+   if(year(dataSet$Year[index]) == 2013){
+    fund = .25 * data$`Total Expenses Updated` 
+    return (fund - (data$`Total Expenses Updated` - data$`Total Revenue Updated`))
+   }
+   else{
+     lastYear <- dataSet %>% filter(`Muni Code` == dataSet$`Muni Code`[index] & `County Name` == dataSet$`County Name`[index] & year(Year) == (year(dataSet$Year[index] - 1)))
+     fund <- lastYear$fundEstimate
+     return (fund - (data$`Total Expenses Updated` - data$`Total Revenue Updated`))
+   }
+}
+
+#Calculates a standardized profit for each year and each municiaplity
+standardizedProfitCalc <- function(index, dataSet){
+  data <- dataSet[index,]
+  return((data$`Total Revenue Updated` - data$`Total Expenses Updated` ) / data$`Total Expenses Updated`)
+  
+}
+
+rowCount = nrow(municip)
+#iterates through every municipality and checks for our outdated failure criteria.
+try(for(i in 1:rowCount){
+  municip$Fail2[i] <- critFailureTest(i, municip)
+  print(i)
+})
+
+#iterates through every municipality and checks for our newest failure criteria.
+try(for(i in 1:rowCount){
+  municip$vulnerability[i] <- vulnerabilityStatusCheck(i, municip)
+  print(i)
+})
+
+municip <- municip %>% arrange(Year)
+
+#calculates fund estimates by year for every municipality by year
+tryCatch(for(i in 1:rowCount){
+  municip$fundEstimate[i] <- fundEstimateCalculation(i, municip)
+},
+
+error = function(e){
+  paste0("error at: ", i)
+}
+)
+
+try(for(i in 1:rowCount){
+  municip$fundStandardizedProfit[i] <- standardizedProfitCalc(i, municip)
+  print(i)
+})
+
+
+write_csv(municip,"municip.csv")
+
+
+#Creating ranks for SW Wisconsin
+municipSub <- municip %>% filter(municip$`County Name` %in% c("GRANT", "IOWA", "LAFAYETTE", "RICHLAND", "GREEN"))
+municipRevenue <- municipSub[,c(1:45,53:55,57:ncol(municipSub))]
+#order data by standardized profit
+orderedsubData <- municipSub %>% arrange(desc(fundStandardizedProfit))
+
+#split data in tables by year
+sub2013 <- orderedsubData %>% filter(year(Year) == 2013 )
+sub2014 <- orderedsubData %>% filter(year(Year) == 2014 )
+sub2015 <- orderedsubData %>% filter(year(Year) == 2015 )
+sub2016 <- orderedsubData %>% filter(year(Year) == 2016 )
+sub2017 <- orderedsubData %>% filter(year(Year) == 2017 )
+sub2018 <- orderedsubData %>% filter(year(Year) == 2018 )
+sub2019 <- orderedsubData %>% filter(year(Year) == 2019 )
+sub2020 <- orderedsubData %>% filter(year(Year) == 2020 )
+sub2021 <- orderedsubData %>% filter(year(Year) == 2021 )
+
+#Rank each municipality by standardized profit for each year
+sub2013 <- sub2013 %>% mutate(rank = dense_rank(desc(fundStandardizedProfit)))
+sub2014 <- sub2014 %>% mutate(rank = dense_rank(desc(fundStandardizedProfit)))
+sub2015 <- sub2015 %>% mutate(rank = dense_rank(desc(fundStandardizedProfit)))
+sub2016 <- sub2016 %>% mutate(rank = dense_rank(desc(fundStandardizedProfit)))
+sub2017 <- sub2017 %>% mutate(rank = dense_rank(desc(fundStandardizedProfit)))
+sub2018 <- sub2018 %>% mutate(rank = dense_rank(desc(fundStandardizedProfit)))
+sub2019 <- sub2019 %>% mutate(rank = dense_rank(desc(fundStandardizedProfit)))
+sub2020 <- sub2020 %>% mutate(rank = dense_rank(desc(fundStandardizedProfit)))
+sub2021 <- sub2021 %>% mutate(rank = dense_rank(desc(fundStandardizedProfit)))
+
+#Merge them back together
+municipSub <- rbind(sub2013,sub2014,sub2015,sub2016,sub2017,sub2017,sub2018,sub2019,sub2020,sub2021)
+
+write.csv(municipSub, "municipSub.csv")
+
+
+municipSub <- read_csv("municipSub.csv")
+
+municip <- read_csv("municip.csv")
+
+```
+
+```{r collin's initial plots}
+
+municipSub <- read_csv("municipSub.csv")
+
+municip <- read_csv("municip.csv")
+
+municipSub %>% 
+  filter(`Muni Type Code` == "T" & `County Name` == "GRANT") %>% 
+  ggplot(aes(x = Year)) + 
+  geom_line(aes(y = `Total Revenue & Other Financing Sources`), color = "green") +
+  geom_point(aes(y = `Total Revenue & Other Financing Sources`), color = "green") +
+  geom_line(aes(y = `Total Expenditures & Other Financing Uses`), color = "red") + 
+  geom_point(aes(y = `Total Expenditures & Other Financing Uses`), color = "red") + 
+  facet_wrap(~Municipality, scales = "free_y") +
+  scale_y_continuous(labels=scales::dollar_format()) +
+  labs(y = "Dollars ($)", title = "Revenue and Expenditures") +
+  theme_dark()
+
+municipSub %>% 
+  ggplot(aes(x = `Total Expenditures & Other Financing Uses`, y = `Total Revenue & Other Financing Sources`, color = Fail)) + 
+  geom_point() +
+  facet_grid(vars(`Muni Type Code`), vars(`County Name`), scales = "free") +
+  scale_y_continuous(labels=scales::dollar_format()) +
+  scale_x_continuous(labels=scales::dollar_format()) +
+  labs(x = "Expenses ($)", y = "Revenue ($)", title = "Expenses vs Revenue") +
+  theme_bw()
+
+
+municip
+
+```
+
+
+
+```{r Initial Plots of new Criteria}
+
+municipSub <- read_csv("municipSub.csv")
+
+municip <- read_csv("municip.csv")
+
+
+
+#independence test on municipality type and Vulnerability
+failure2 <- municipSub %>% filter(vulnerability == 'Fail')
+failure2
+failure <- municipSub %>% filter(Fail == 'Fail')
+failure
+lastyear <- municipSub %>% filter(year(Year) == 2021)
+lastyear
+cTable <- municipSub %>%  group_by(vulnerability, `Muni Type Code`) %>% summarise(n = n()) %>% spread(`Muni Type Code`, n) 
+cTable
+
+
+# is it fair to say that this is a test to see if a certain municipality is over represented or under represented in any category of criticalfailure?
+cTable[c(1,3),1:4]
+cTable[c(1,3),2:4]
+noNA <- cTable[c(1,3),1:4]
+
+chd_mun <- chisq.test(cTable[c(1,3),2:4], correct = T)
+chd_mun
+
+
+
+#independence test on municipality type and Fail2
+vulnerability <- municipSub %>% filter(vulnerability == 'Fail')
+cTable2 <- municipSub %>%  group_by(vulnerability, `Muni Type Code`) %>% summarise(n = n()) %>% spread(`Muni Type Code`, n) 
+chd_mun2 <- chisq.test(cTable2[c(1,3),2:4], correct = T)
+chd_mun2
+noNA2 <- cTable2[c(1,3),1:4]
+noNA2
+
+#Create fail2 counts by municipality graphs
+uniqFailure <- failure2 %>% distinct(`Muni Code`, `County Name`)
+uniqFailure
+colnames(noNA) <- c("Critical Failure", "City", "Town", "Village")
+noNA
+plotFrame <- as.data.frame(matrix(nrow =6,ncol = 3))
+colnames(plotFrame) <- c("Critical Failure", "Municipality", "Count")
+plotFrame[1:3,1] <- noNA[1,1]
+plotFrame[4:6,1] <- noNA[2,1]
+plotFrame[c(1,4),2] <- "City"
+plotFrame[c(2,5),2] <- "Town"
+plotFrame[c(3,6),2] <- "Village"
+plotFrame[1:6,3] <- c(5,61,23,91,715,289)
+ggplot(plotFrame, aes(x = Municipality, y = Count, fill = `Critical Failure`)) + geom_bar(stat = 'identity', position = 'dodge') + ggtitle("Critical Failure Count by Municipality")
+
+#Create vulnerability counts by municipality graphs
+uniqFailure2 <- failure2 %>% distinct(`Muni Code`, `County Name`)
+uniqFailure2
+colnames(noNA2) <- c("Vulnerability", "City", "Town", "Village")
+noNA2
+plotFrame2 <- as.data.frame(matrix(nrow =6,ncol = 3))
+colnames(plotFrame2) <- c("Vulnerability", "Municipality", "Count")
+plotFrame2[1:3,1] <- noNA2[1,1]
+plotFrame2[4:6,1] <- noNA2[2,1]
+plotFrame2[c(1,4),2] <- "City"
+plotFrame2[c(2,5),2] <- "Town"
+plotFrame2[c(3,6),2] <- "Village"
+plotFrame2[1:6,3] <- c(5,61,23,91,715,289)
+ggplot(plotFrame2, aes(x = Municipality, y = Count, fill = `Vulnerability`)) + geom_bar(stat = 'identity', position = 'dodge') + ggtitle("Vulnerability Count by Municipality")
+
+
+#Comparison of criteria
+compareFrame <- as.data.frame(matrix(nrow = 3, ncol = 2))
+colnames(compareFrame) <- c("Failure Criteria", "Unique Failure Count")
+compareFrame[1,1] <- "First (Weak) Failure Criteria"
+compareFrame[2,1] <- "Second (Bad) Failure Criteria"
+compareFrame[3,1] <- "Third (Good) Failure Criteria"
+compareFrame[1,2] <- 128
+compareFrame[2,2] <- 65
+compareFrame[3,2] <- 96
+compareFrame
+ggplot(compareFrame, aes(x = `Failure Criteria`, y = `Unique Failure Count`)) + geom_bar(stat = 'identity') + ggtitle("Comparison of Failure Criteria")
+
+municipSub$Fail2
+
+municipNoNA <- municipSub %>% filter(vulnerability != "NA")
+municipNoNA$Fail2
+municipNoNA
+#Vulnerability count by year
+ggplot(municipNoNA, aes(x = Year, fill = vulnerability)) + geom_bar(position = "dodge")
+
+#Regular Failure count by year
+ggplot(municipSub, aes(x = Year, fill = Fail)) + geom_bar(position = "dodge")
+
+#Critical Failure count by municipality and year with individual scales
+ggplot(municipNoNA, aes(x = Year, fill = Fail2)) + geom_bar(position = "dodge") + facet_wrap(~`Muni Type Code`, scales = "free") + scale_y_continuous(breaks = pretty_breaks())
+
+#Critical Failure count by municipality and year with shared scale
+ggplot(municipNoNA, aes(x = Year, fill = Fail2)) + geom_bar(position = "dodge") + facet_wrap(~`Muni Type Code`) + scale_y_continuous(breaks = pretty_breaks())
+
+#Regular Failure count by municipality and year with individual scales
+ggplot(municipSub, aes(x = Year, fill = Fail)) + geom_bar(position = "dodge") + facet_wrap(~`Muni Type Code`, scales = "free") + scale_y_continuous(breaks = pretty_breaks())
+
+#Regular Failure count by municipality and year with shared scale
+ggplot(municipSub, aes(x = Year, fill = Fail)) + geom_bar(position = "dodge") + facet_wrap(~`Muni Type Code`) + scale_y_continuous(breaks = pretty_breaks())
+
+#Graph specific municipalities fund over time
+municipSub
+specMunData <- municipSub %>% filter(Municipality == "NEW DIGGINGS" & `Muni Type Code` == "T" )
+specMunData
+
+#linear model
+
+linModel <- glm(fundEstimate ~ Year, data = specMunData, family = "gaussian")
+summary(linModel)
+pchisq(2519484471, df=8)
+
+#trend line estimate
+ggplot(specMunData, aes(x = Year, y = fundEstimate)) + geom_point() + geom_smooth(method=lm , color="red")
+
+municip
+#other Model (WIP)
+ggplot(specMunData, aes(x = Year, y = fundEstimate)) + geom_point() + geom_smooth(method="nls" , color="red", method.args = list(family=Gamma(link = "log")))
+
+
+#dot plot for rank by year on specified municipality
+ggplot(specMunData, aes(x = Year, y = rank, label = rank)) + geom_point() + geom_text(hjust=0.5, vjust=-0.5) + ylim(0, 150)
+
+
+#Forecasting setup
+training=window(municipSub, start = c(2013,1), end = c(2020,12))
+validation=window(municipSub, start = c(2021,1))
+
+
+#Recode vulnerability for modelling
+municipSub <- municipSub %>% mutate(recodedVuln = case_when ((vulnerability == "Fail") ~ 1, (vulnerability == "No Fail") ~ 0))
+
+
+#Models for vulnerability based on population
+vulnRegressionIdentity <-glm(recodedVuln~Population, family=binomial(link = "identity"),data=municipSub)
+vulnRegressionIdentity
+summary(vulnRegressionIdentity)
+
+vulnRegressionLog <-glm(recodedVuln~Population, family=binomial(link = log),data=municipSub)
+vulnRegressionLog
+summary(vulnRegressionLog)
+
+vulnRegressionLogit <-glm(recodedVuln~Population, family=binomial(link = logit),data=municipSub)
+vulnRegressionLogit
+summary(vulnRegressionLogit)
+#all three models show population as not a significant predictor of vulnerability
+
+dchisq(744.63, df = 1330)
+dchisq(744.11, df = 1330)
+dchisq(744.10, df = 1330)
+#p-value of approximately zero means each model is not appropriate for predicting vulnerability.
+
+#graphs for models
+#log link
+ggplot(municipSub, aes(x=Population, y=recodedVuln)) + 
+  geom_point(alpha=.5) +
+  stat_smooth(method="glm", se=FALSE, method.args = list(family=binomial(link = log)),
+              col="red", lty=2)
+
+#logit link
+ggplot(municipSub, aes(x=Population, y=recodedVuln)) + 
+  geom_point(alpha=.5) +
+  stat_smooth(method="glm", se=FALSE, method.args = list(family=binomial(link = logit)),
+              col="red", lty=2)
+
+#identity link
+ggplot(municipSub, aes(x=Population, y=recodedVuln)) + 
+  geom_point(alpha=.5) +
+  stat_smooth(method="glm", se=FALSE, method.args = list(family=binomial(link = "identity")),
+              col="red", lty=2)
+
+#want to see which of those municipalies are above 10k population.
+highPop <- municipSub %>% filter(Population > 10000, year(Year) == 2021)
+highPop
+
+
+ggplot(municipNoNA, aes(x = Year, fill = vulnerability)) + geom_bar(position = "dodge")
+
+```
+
+
+
+
+```{r Identifying Key Municipalities}
+#First part is or second Criteria
+
+#Steps to create a new table with each municipality represented uniquely with type included for identification.
+municipHolder <- municipSub %>% filter(year(Year) == 2014)
+
+
+municip_name <- municipHolder$Municipality
+municip_type <- municipHolder$`Muni Type Code`
+
+critFailureCount <- tibble(Municipality_Name = municip_name, Municipality_Type = municip_type)
+
+#Add column to track failure counts
+critFailureCount <- critFailureCount %>% add_column(Count = NA)
+critFailureCount
+
+#sum fail counts into the new count column
+for(i in 1:148){
+  tempSet <- municipSub %>% filter(Municipality ==  critFailureCount$Municipality_Name[i] & `Muni Type Code` == critFailureCount$Municipality_Type[i] & Fail2 == "Fail")
+  failCount <- nrow(tempSet)
+  critFailureCount$Count[i] <- failCount
+}
+
+critFailureCount
+#seperate into three tables based on mun type
+cityCount <- critFailureCount %>% filter(Municipality_Type == "C")
+townCount <- critFailureCount %>% filter(Municipality_Type == "T")
+villageCount <- critFailureCount %>% filter(Municipality_Type == "V")
+
+cityCount
+townCount
+villageCount
+
+
+#Get municipalities that have maximum failure counts
+cityCountMax <- cityCount %>% filter(Count == max(Count))
+townCountMax <- townCount %>% filter(Count == max(Count))
+villageCountMax <- villageCount %>% filter(Count == max(Count))
+
+cityCountMax
+townCountMax
+villageCountMax
+
+
+#Start of section for vulnerability
+#Steps to create a new table with each municipality represented uniquely with type included for identification.
+municipHolder2 <- municipSub %>% filter(year(Year) == 2014)
+
+
+municip_name2 <- municipHolder2$Municipality
+municip_type2 <- municipHolder2$`Muni Type Code`
+
+vulnerabilityCount <- tibble(Municipality_Name = municip_name2, Municipality_Type = municip_type2)
+
+#Add column to track failure counts
+vulnerabilityCount <- vulnerabilityCount %>% add_column(Count = NA)
+vulnerabilityCount
+
+#sum fail counts into the new count column
+for(i in 1:148){
+  tempSet <- municipSub %>% filter(Municipality ==  vulnerabilityCount$Municipality_Name[i] & `Muni Type Code` == vulnerabilityCount$Municipality_Type[i] & vulnerability == "Fail")
+  failCount <- nrow(tempSet)
+  vulnerabilityCount$Count[i] <- failCount
+}
+
+vulnerabilityCount
+#seperate into three tables based on mun type
+cityCount2 <- vulnerabilityCount %>% filter(Municipality_Type == "C")
+townCount2 <- vulnerabilityCount %>% filter(Municipality_Type == "T")
+villageCount2 <- vulnerabilityCount %>% filter(Municipality_Type == "V")
+
+cityCount2
+townCount2
+villageCount2
+
+
+#Get municipalities that have maximum failure counts
+cityCountMax2 <- cityCount2 %>% filter(Count == max(Count))
+townCountMax2 <- townCount2 %>% filter(Count == max(Count))
+villageCountMax2 <- villageCount2 %>% filter(Count == max(Count))
+
+cityCountMax2
+townCountMax2
+villageCountMax2
+
+```
